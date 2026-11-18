@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RTI 5 — Interactive Surface Relighting</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;color:#e8f0f1;background:#101c23}
+*{box-sizing:border-box} body{margin:0} header{padding:16px 20px;border-bottom:1px solid #35424c;display:flex;align-items:center;justify-content:space-between;gap:16px}
+h1{font-size:17px;margin:0} small{color:#acbec7} main{display:grid;grid-template-columns:minmax(0,1fr) 258px;height:calc(100dvh - 72px);min-height:490px}
+#stage{position:relative;overflow:hidden;display:grid;place-items:center;background:#18242b;touch-action:none;cursor:crosshair}
+canvas{width:100%;height:100%;display:block}
+#hint{position:absolute;bottom:14px;left:14px;background:#101c23bd;padding:8px 11px;border-radius:8px;color:#cbd9df;font-size:12px;pointer-events:none}
+aside{padding:19px 17px;border-left:1px solid #35424c;display:flex;flex-direction:column;gap:16px}
+label{display:flex;flex-direction:column;gap:8px;font-size:13px;color:#d5e3e8}
+label span{display:flex;justify-content:space-between;gap:8px}input[type=range]{width:100%;accent-color:#8bd0d6}
+button{padding:10px 13px;border:1px solid #6b8792;background:#223640;border-radius:8px;color:white;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid #a9e4e6}
+.controls{display:flex;flex-wrap:wrap;gap:8px}
+#msg{color:#e8b2a8;font-size:12px;line-height:1.5} .note{font-size:12px;line-height:1.6;color:#9fb4bf}
+@media(max-width:760px){main{display:flex;flex-direction:column;height:auto}#stage{height:58dvh;min-height:320px}aside{border-left:0;border-top:1px solid #35424c}}
+</style></head>
+<body>
+<header><div><h1>Interactive RTI — Timber Surface</h1><small>Move your pointer across the image to change illumination</small></div><small>RTI 5</small></header>
+<main><section id="stage" aria-label="Interactive relit wood surface"><canvas id="view"></canvas><div id="hint">Drag or move to change light direction · Scroll to zoom</div></section>
+<aside>
+<label><span>Light strength <output id="strengthOut">1.8</output></span><input id="strength" type="range" min="0" max="3" step=".1" value="1.8"></label>
+<label><span>Ambient light <output id="ambientOut">0.38</output></span><input id="ambient" type="range" min="0" max="1" step=".02" value=".38"></label>
+<label><span>Exposure <output id="exposureOut">5.0</output></span><input id="exposure" type="range" min=".5" max="12" step=".1" value="5"></label>
+<label><span>Zoom <output id="zoomOut">100%</output></span><input id="zoom" type="range" min="1" max="4" step=".1" value="1"></label>
+<label><span><span>Invert vertical normals</span><input id="flipY" type="checkbox"></span></label>
+<div class="controls"><button id="reset">Reset light / zoom</button><button id="fullscreen">Full screen</button></div>
+<div class="note">Derived from supplied albedo and surface normal maps. This is interactive normal-map relighting, not an original PTM/RTI polynomial reconstruction. Lighting appearance depends on how normals were encoded.</div>
+<div id="msg" role="status"></div>
+</aside></main>
+<script>
+(function(){
+const stage=document.getElementById('stage'),canvas=document.getElementById('view'),msg=document.getElementById('msg');
+const gl=canvas.getContext('webgl',{alpha:false,antialias:true,preserveDrawingBuffer:false});
+if(!gl){msg.textContent='WebGL is not available in this browser.';return}
+const vs=`attribute vec2 aPos;varying vec2 vUv;void main(){vUv=vec2((aPos.x+1.)*.5,1.-(aPos.y+1.)*.5);gl_Position=vec4(aPos,0.,1.);}`;
+const fs=`precision mediump float;varying vec2 vUv;uniform sampler2D albedoTex;uniform sampler2D normalTex;
+uniform vec3 lightDir;uniform float strength;uniform float ambient;uniform float exposure;uniform float zoom;uniform float aspect;uniform float imageAspect;uniform float flipY;
+void main(){
+vec2 centered=vUv-.5;vec2 uv;
+if(aspect>imageAspect){centered.x*=aspect/imageAspect;} else {centered.y*=imageAspect/aspect;}
+uv=centered/zoom+.5;
+if(uv.x<0.||uv.x>1.||uv.y<0.||uv.y>1.){gl_FragColor=vec4(.06,.10,.13,1.);return;}
+vec3 n=texture2D(normalTex,uv).rgb*2.-1.;
+n.y*=mix(1.,-1.,flipY);n=normalize(n);
+float diffuse=max(0.,dot(n,normalize(lightDir)));
+vec3 color=texture2D(albedoTex,uv).rgb*exposure*(ambient+strength*diffuse);
+color=pow(clamp(color,0.,1.),vec3(.90));
+gl_FragColor=vec4(color,1.);
+}`;
+function shader(type,source){const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+let program;try{program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,vs));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fs));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));}catch(e){msg.textContent=e.message;return}
+gl.useProgram(program);
+const pos=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,pos);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+const attr=gl.getAttribLocation(program,'aPos');gl.enableVertexAttribArray(attr);gl.vertexAttribPointer(attr,2,gl.FLOAT,false,0,0);
+const uniforms={};['lightDir','strength','ambient','exposure','zoom','aspect','imageAspect','flipY'].forEach(n=>uniforms[n]=gl.getUniformLocation(program,n));
+let light=[.35,-.25,.9], imageAspect=9568/6376, textures={};
+const fields=['strength','ambient','exposure','zoom'];
+function draw(){
+let w=stage.clientWidth,h=stage.clientHeight,dpr=Math.min(window.devicePixelRatio||1,2);
+canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);gl.viewport(0,0,canvas.width,canvas.height);
+gl.uniform3fv(uniforms.lightDir,light);fields.forEach(n=>gl.uniform1f(uniforms[n],parseFloat(document.getElementById(n).value)));
+gl.uniform1f(uniforms.aspect,w/h);gl.uniform1f(uniforms.imageAspect,imageAspect);gl.uniform1f(uniforms.flipY,document.getElementById('flipY').checked?1:0);
+if(textures.a&&textures.n){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,textures.a);gl.uniform1i(gl.getUniformLocation(program,'albedoTex'),0);
+gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,textures.n);gl.uniform1i(gl.getUniformLocation(program,'normalTex'),1);
+gl.drawArrays(gl.TRIANGLES,0,6);}
+}
+function load(url,slot){const img=new Image();img.onload=()=>{const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,img);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+textures[slot]=tex;if(slot==='a')imageAspect=img.naturalWidth/img.naturalHeight;draw();};img.onerror=()=>msg.textContent='Image loading failed: '+url;img.src=url;}
+load('./assets/albedo.webp','a');load('./assets/normal.webp','n');
+function point(e){const r=stage.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*2-1,y=(e.clientY-r.top)/r.height*2-1;const d=Math.sqrt(x*x+y*y);light=[x*.9,-y*.9,Math.max(.25,1.-d*.65)];draw();}
+stage.addEventListener('pointermove',point);stage.addEventListener('pointerdown',e=>{stage.setPointerCapture(e.pointerId);point(e)});
+stage.addEventListener('wheel',e=>{e.preventDefault();const el=document.getElementById('zoom');el.value=Math.max(1,Math.min(4,Number(el.value)+(e.deltaY<0?.15:-.15)));el.dispatchEvent(new Event('input'));},{passive:false});
+fields.forEach(n=>document.getElementById(n).addEventListener('input',()=>{document.getElementById(n+'Out').textContent=n==='zoom'?Math.round(Number(document.getElementById(n).value)*100)+'%':Number(document.getElementById(n).value).toFixed(1);draw()}));
+document.getElementById('flipY').addEventListener('change',draw);
+document.getElementById('reset').addEventListener('click',()=>{light=[.35,-.25,.9];document.getElementById('zoom').value=1;document.getElementById('zoom').dispatchEvent(new Event('input'));draw()});
+document.getElementById('fullscreen').addEventListener('click',()=>stage.requestFullscreen?.());
+window.addEventListener('resize',draw);new ResizeObserver(draw).observe(stage);
+})();
+</script></body></html>
