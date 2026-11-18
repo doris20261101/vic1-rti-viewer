@@ -1,1 +1,0 @@
-VIC1 RTI single-file version. Upload index.html to the ROOT of the vic1-rti-viewer GitHub repository, replacing the old index.html. No assets folder is required for this version. Vercel framework: Other; no build command. The HTML embeds both WebP images. Open in browser and test relighting. This is normal-map relighting, not original PTM reconstruction.
